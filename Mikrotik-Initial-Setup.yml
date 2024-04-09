@@ -1,0 +1,293 @@
+---
+
+- name: "Standard and Initial Static Configuration"
+  hosts: mikrotik-test
+  gather_facts: no
+
+  vars_prompt:
+
+    - name: mikrotik_ip
+      prompt: "Enter the MikroTik IP address"
+      private: no
+
+    - name: mikrotik_user
+      prompt: "Enter the MikroTik username"
+      private: no
+
+    - name: mikrotik_password
+      prompt: "Enter the MikroTik password"
+      private: yes  # This will hide the input from the console
+
+    - name: Name_Device
+      prompt: Enter the Identity for Mikrotik
+      private: no
+
+    - name: Password_Admin
+      prompt: Enter the New Password for Admin
+      private: yes
+
+    - name: Ortimo_OpenVPN_Bool
+      prompt: Do you want to have OpenVPN to Alparslan? (yes/no)
+      private: no
+
+    - name: VoipMax_OpenVPN_Bool
+      prompt: Do you want to have OpenVPN to VoIPMax? (yes/no)
+      private: no
+
+    - name: Ortimo_OpenVPN_Username
+      prompt: What is your username for OpenVPN to Alparslan?
+      private: no
+      #when: Ortimo_OpenVPN_Bool == 'yes'
+
+    - name: Ortimo_OpenVPN_Password
+      prompt: What is your password for OpenVPN to Alparslan?
+      private: yes
+      #when: Ortimo_OpenVPN_Bool == 'yes'
+
+
+    - name: VoipMax_OpenVPN_Username
+      prompt: What is your username for OpenVPN to VoIPMax?
+      private: no
+      #when: VoipMax_OpenVPN_Bool == 'yes'
+
+    - name: VoipMax_OpenVPN_Password
+      prompt: What is your password for OpenVPN to VoIPMax?
+      private: yes
+      #when: VoipMax_OpenVPN_Bool == 'yes'
+
+    - name: VoIPMAX_Service_Bool
+      prompt: Do this customer has the VoIPMax PBX? (yes/no)
+      private: no
+
+    - name: IPPBX_IP_Domain
+      prompt: Enter the PBX IP and Domain in format (pbx_ip:pbx_domain) for example 95.211.35.18:pbx.voipmax.nl?
+      private: no
+      #when: VoipMax_Service_Bool == 'yes'
+
+    - name: netoworks_properties
+      prompt: "Enter all the network properties in format 'vlanid:vlan_interface_ip:vlan_start_ip:vlan_end_ip:vlan_gateway:vlan_dns:name:subnet' separated by commas (e.g., '10:192.168.10.0/24:192.168.10.99:192.168.10.199:192.168.10.1:192.168.10.1:Office:192.168.1.0/24,20:192.168.20.0/24:192.168.20.99:192.168.20.199:192.168.20.1:192.168.20.1:Guest:192.168.2.0/24')"
+      private: no
+
+    - name: vlan_untag
+      prompt: "Enter the VLAN to be untag for clients"
+      private: no
+
+
+  tasks:
+
+    - name: Execute initialization script
+      ansible.builtin.command: "python3 ./init_mikrotik.py {{ mikrotik_ip }} {{ mikrotik_user }} {{ mikrotik_password }}"
+      delegate_to: localhost
+
+    - name: Set Identity
+      community.routeros.command:
+        commands:
+          - /system identity set name={{ Name_Device }}
+
+    - name: Set Admin Password
+      community.routeros.command:
+        commands:
+          - /user set [find name=admin] password= {{ Password_Admin }}
+
+    - name: "Naming the Ethernet Interfaces"
+      community.routeros.command: 
+        commands: 
+          - /interface ethernet set [ find default-name=ether1 ] name=ether1_Trunk_Switch
+          - /interface ethernet set [ find default-name=ether2 ] name=ether2_WAN1
+          - /interface ethernet set [ find default-name=ether3 ] name=ether3_WAN2
+          - /interface ethernet set [ find default-name=ether4 ] name=ether4
+          - /interface ethernet set [ find default-name=ether5 ] name=ether5
+
+    - name: "Add DHCP Client on WAN1"
+      community.routeros.command:
+        commands:
+          - /ip dhcp-client add interface=ether2_WAN1 add-default-route=yes use-peer-dns=yes use-peer-ntp=yes
+          - /ip dhcp-client add interface=ether3_WAN2 add-default-route=yes use-peer-dns=yes use-peer-ntp=yes
+
+
+    - name: "Configuring OpenVPN Client to Alparslan"
+      community.routeros.command: 
+        commands: 
+          - /interface ovpn-client add connect-to=alparslan.4cloud4.com name=OpenVPN_Ortimo password="{{ Ortimo_OpenVPN_Password }}" user="{{ Ortimo_OpenVPN_Username }}"
+      when: Ortimo_OpenVPN_Bool == 'yes'
+
+    - name: "Configuring OpenVPN Client to Alparslan"
+      community.routeros.command: 
+        commands:
+          - /interface ovpn-client add connect-to=voipmax.4cloud4.com name=OpenVPN_VoIPMAX password="{{ VoipMax_OpenVPN_Password }}" user="{{ VoipMax_OpenVPN_Username }}"
+      when: VoipMax_OpenVPN_Bool == 'yes'
+  
+    - name: "Create & Configure the bridge"
+      community.routeros.command:
+        commands:
+          - /interface bridge add name=Bridge_Trunk vlan-filtering=yes pvid={{ vlan_untag }}
+
+#0 vlanid
+#1 vlan_interface_ip
+#2 vlan_start_ip
+#3 vlan_end_ip
+#4 vlan_gateway
+#5 vlan_dns
+#6 name
+#7 subnet
+
+    - name: Parse Network Properties input
+      set_fact:
+        netoworks_properties: "{{ netoworks_properties.split(',') | map('split', ':') | map('list') }}"
+
+    - name: Create VLANs on Mikrotik
+      community.routeros.command:
+        commands: 
+          - /interface vlan add name=VLAN_"{{ item[0] }}"_"{{ item[6] }}" vlan-id="{{ item[0] }}" interface=‌Bridge_Trunk
+      loop: "{{ netoworks_properties }}"
+
+    - name: Add trunk Port
+      community.routeros.command:
+        commands: 
+          - /interface bridge vlan add bridge=Bridge_Trunk untagged=ether1_Trunk_Switch vlan-ids="{{ item[0] }}"
+      loop: "{{ netoworks_properties }}"
+
+    - name: Add LAN interface list
+      community.routeros.command:
+        commands: 
+          - /interface list add name=LAN
+          - /interface list add name=VoIPMax
+
+    - name: Add Interface Lists
+      community.routeros.command:
+        commands:
+          - /interface list add name="{{ item[6] }}"
+          - /interface list add include="{{ item[6] }}" name=LAN
+      loop: "{{ netoworks_properties }}"
+        
+    - name: Create IP Pool on Mikrotik
+      community.routeros.command:
+        commands: 
+          - /ip pool add ranges="{{ item[2] }}"-"{{ item[3] }}" name=IP_Pool_"{{ item[6] }}"
+      loop: "{{ netoworks_properties }}"
+
+    - name: Assign IP to VLAN Interface on Mikrotik
+      community.routeros.command:
+        commands: 
+          - /ip address add address="{{ item[1] }}" interface=VLAN_"{{ item[0] }}"_"{{ item[6] }}"
+      loop: "{{ netoworks_properties }}"
+
+    - name: Setup DHCP Server on Mikrotik
+      community.routeros.command:
+        commands:
+          - /ip dhcp-server add address-pool=Pool_"{{ item[6] }}" interface=VLAN_"{{ item[0] }}"_"{{ item[6] }}" lease-time=1w name=DHCP_"{{ item[6] }}"
+          - /ip dhcp-server network add address="{{ item[7] }}" dns-server="{{ item[5] }}" gateway="{{ item[4] }}"
+      loop: "{{ netoworks_properties }}"
+
+    - name: Add WAN and Ortimo and VoIPMAX to List
+      community.routeros.command:
+        commands:
+          - /interface list member add interface=OpenVPN_Ortimo list=Cloud
+          - /interface add interface=OpenVPN_VoIPMAX list=VoIPMax
+          - /interface add interface=ether2_WAN1 list=WAN
+          - /interface add interface=ether3_WAN2 list=WAN
+    
+    - name: Add interfaces to Lists
+      community.routeros.command:
+        commands:
+          - /interface list member add interface=VLAN_"{{ item[0] }}"_"{{ item[6] }}" list="{{ item[6] }}"
+      loop: "{{ netoworks_properties }}"
+
+    - name: DNS Server Setting
+      community.routeros.command:
+        commands:
+          - /ip dns set allow-remote-requests=yes
+          - /ip dns set server=8.8.8.8,1.1.1.1
+          - /ip dns set cache-max-ttl=0s
+
+    - name: Parse Network Properties input
+      set_fact:
+        IPPBX_IP_Domain: "{{ IPPBX_IP_Domain.split(':') }}"
+
+    - name: DNS Static Record for PBX
+      community.routeros.command:
+        commands:
+          - /ip dns static add address="{{ IPPBX_IP_Domain[0] }}" name="{{ IPPBX_IP_Domain[1] }}" type=A
+      when: VoIPMAX_Service_Bool == 'yes'
+
+    - name: Add Admin IP List
+      community.routeros.command:
+        commands:
+          - /ip firewall address-list add list=AdminAccess address=10.200.110.0/24
+
+    - name: Set Static Firewall Filter Rules
+      community.routeros.command:
+        commands:
+          - /ip firewall filter add action=fasttrack-connection chain=forward connection-state=established,related hw-offload=yes comment="FastTrack for established and related connections"
+          - /ip firewall filter add action=accept chain=forward connection-state=established,related comment="Accept established and related connections"
+          - /ip firewall filter add add action=accept chain=input connection-state=established,related comment="Accept established and related connections on input"
+          - /ip firewall filter add action=accept chain=input connection-state=new dst-port=35300 protocol=tcp comment="Allow Winbox access"
+          - /ip firewall filter add action=accept chain=input connection-state=new dst-port=22 protocol=tcp src-address-list=AdminAccess comment="Allow SSH from AdminAccess list"
+          - /ip firewall filter add add action=accept chain=input connection-state=new dst-port=8181 protocol=tcp src-address-list=AdminAccess comment="Allow WebFig from AdminAccess list"
+          - /ip firewall filter add action=accept chain=forward in-interface-list=LAN out-interface-list=LAN comment="Allow LAN access to LAN"
+          - /ip firewall filter add action=accept chain=forward in-interface-list=LAN out-interface-list=WAN comment="Allow LAN access to WAN"
+          - /ip firewall filter add action=accept chain=input protocol=icmp comment="Allow ICMP ping"
+          - /ip firewall filter add action=drop chain=input in-interface-list=WAN comment="Drop all other incoming connections on WAN"
+          - /ip firewall filter add action=drop chain=forward connection-nat-state=!dstnat out-interface-list=!WAN comment="Drop invalid and non-DSTNAT forward from WAN"
+          - /ip firewall filter add action=drop chain=forward connection-nat-state=!dstnat connection-state=new in-interface-list=WAN comment="Drop new non-DSTNAT forward from WAN"
+          - /ip firewall filter add action=drop chain=forward connection-state=invalid in-interface-list=WAN comment="Drop invalid forward from WAN"
+
+    - name: Set NAT Firewall Rule
+      community.routeros.command:
+        commands:
+          - /ip firewall nat add action=masquerade chain=srcnat out-interface-list=WAN comment="Masquerade for outbound traffic from LAN to WAN"
+
+    - name: Set IP Services
+      community.routeros.command:
+        commands:
+          - /ip service set telnet disabled=yes
+          - /ip service set ftp disabled=yes
+          - /ip service set api disabled=yes
+          - /ip service set api-ssl disabled=yes
+          - /ip service set winbox port=35300
+          - /ip service set www address=10.8.110.0/24 port=8181
+          - /ip service set ssh address=10.8.110.0/24 port=2220
+
+    - name: Set Time & NTP
+      community.routeros.command:
+        commands:
+          - /system clock set time-zone-name=Europe/Amsterdam
+          - /system ntp client set enabled=yes
+          - /system ntp client servers add address=3.nl.pool.ntp.org
+
+    - name: Set Extra
+      community.routeros.command:
+        commands:
+          - /system note set show-at-login=no
+          - /system logging action set memory remember=yes
+
+    - name: Securing Mikrotik
+      community.routeros.command:
+        commands:
+          - /ip ssh set strong-crypto=yes forwarding-enabled=both
+          - /tool mac-server mac-winbox set allowed-interface-list=LAN
+          - /tool mac-server ping set enabled=no
+          - /ip neighbor discovery-settings set discover-interface-list=LAN
+          - /tool bandwidth-server set enabled=no 
+          - /ip proxy set enabled=no
+          - /ip socks set enabled=no
+          - /ip upnp set enabled=no
+          - /ip cloud set ddns-enabled=no update-time=no
+          - /lcd set enabled=no
+
+    - name: IPv6 Firewall
+      community.routeros.command:
+        commands:
+          - /system package disable ipv6
+          - /ipv6 firewall filter add chain=input action=drop comment='Drop all IPv6 input traffic
+          - /ipv6 firewall filter add chain=forward action=drop comment='Drop all IPv6 forward traffic
+
+
+
+
+
+
+  
+
+
+

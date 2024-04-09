@@ -1,0 +1,14 @@
+[mikrotik-test]
+NAM-Test
+
+[mikrotik-routers]
+NAM-Main
+NAM-UP
+NAM-Down
+NAM-Room
+
+[mikrotik-firewalls-AMS]
+alparslan
+albasan
+voipmax
+artuk

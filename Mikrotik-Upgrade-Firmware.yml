@@ -1,0 +1,44 @@
+---
+
+- name: "Check & Upgrade ROS"
+  hosts: mikrotik-routers
+  gather_facts: no
+
+  tasks:
+  
+    - name: Check Current firmware
+      community.routeros.command:
+        commands:
+          - ':put [/system routerboard get current-firmware]'
+      register: firmware_current
+
+    - name: Check Upgrade Mikrotik Firmware 
+      community.routeros.command:
+        commands:
+          - ':put [/system routerboard get upgrade-firmware]'
+      register: firmware_upgrade
+
+    - name: Upgrade Mikrotik Routerboard firmware
+      community.routeros.command:
+        commands:
+          - ':execute script="/system routerboard upgrade"'
+      when: firmware_current != firmware_upgrade
+
+    - name: Wait for firmware upgrade and then reboot
+      community.routeros.command:
+        commands:
+          - /system routerboard print
+      register: Reboot_Status
+      retries: 3
+      delay: 15
+      when: firmware_current != firmware_upgrade
+
+    - name: print variable
+      debug:
+        msg: "{{ Reboot_Status }}"
+      
+    - name : Reboot Mikrotik
+      community.routeros.command:
+        commands:
+          - ':execute script="/system reboot"'
+      when: changed = true

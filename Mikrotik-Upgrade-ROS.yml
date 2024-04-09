@@ -1,0 +1,34 @@
+---
+
+- name: "Check Upgrade ROS"
+  hosts: mikrotik-routers
+  gather_facts: no
+
+  tasks:
+    - name: "Check the Mikrotik installed ROS"
+      routeros_command: 
+        commands: /system package print
+      register: version_output
+
+    - name: "Display facts variable"
+      debug: 
+        var: version_output 
+
+    - name: Set Update Channel
+      routeros_command:
+        - /system package update set channel=stable
+
+    - name: Check Update the ROS Version 
+      routeros_command:
+        commands:
+          - /system package update check-for-updates
+      register: updatecheck
+
+    - name: print variable
+      debug:
+        msg: "{{ updatecheck }}"
+
+    - name: download the new version
+      commands:
+        - /system package update install
+      when: updatecheck.stdout.find('System is already up to date') == -1 
